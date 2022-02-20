@@ -1,0 +1,265 @@
+%--------------
+\chapter{Control}
+\section{PID}
+\section{LQR}
+Linear Quadratic Regulator is an optimal controller for linear systems and a quadratic cost function. It drives the states to zeros while keeping the control input small. It can be extended to
+\begin{enumerate}[topsep=0pt,itemsep=2pt,parsep=0pt,partopsep=0pt]
+    \item Regularization of non-linear system to a non-zero fixed point
+    \item Penalize rate of change of control inputs i.e for example jerk
+    \item Trajectory tracking for non-linear systems
+    \item Linear Time Varying (LTV) systems
+    \item Stochastic Systems
+    \item Affine systems
+\end{enumerate}
+\subsection{Problem formulation}
+The finitie horizon LQR problem is to find control inputs that minimizes 
+\begin{align}
+    J=\sum_{k=0}^N(x_k^TQx_k + u_k^TRu_k) \label{eq:chap2_lqr_cost}
+\end{align}
+
+with $Q\succ0$ and $R\succ0$, $Q$ and $R$ are positive semi-definite matrices, subject to 
+$$x_{k+1}=Ax_{k}+Bu_{k}$$
+When $N$ is $\inf$, the problem is infinite horizon problem.
+Since $Q$ and $R$ are positive semi-definite, any $x$ or $u$ that are not zeros will yield a positive cost by definition.
+\subsection{Examples}
+\subsubsection{Leader following}
+For this problem, let's consider kinematic models in 1D. (The 2D motion can be reduced to under the assumption that the leader and the ego do not have any lateral movement and move on a straight road and appropriately attaching a coordinate system). Assuming our prediction module is perfect, we will model the leader as
+\begin{align}
+    s_{k+1}^{leader} &= s_{k}^{leader} + v_{k}^{leader} \delta t \\
+    v_{k+1}^{leader} &= v_{k}^{leader}
+\end{align}
+$v_{k}$ is the longitudinal speed of all vehicles and is known at all time steps (from an on-board perception module).
+The ego or the self vehicle that is controlled is modeled as
+\begin{align}
+    s_{k+1}^{ego} &= s_{k}^{ego} + v_{k}^{ego}~\delta t + 0.5~a_{k}^{ego}~\delta t^2 \\
+    v_{k+1}^{ego} &= v_{k}^{ego} + a_{k}^{ego}~\delta t \\
+    a_{k+1}^{ego} &= u_{k}^{ego}
+\end{align}
+where $u_{k}$ is the control input to our system.
+The goal is to follow the leader while maintaining a distance greater than or equal to $L_{sep}$. Let's redefine the state of our system as
+\begin{align}
+    s_{k+1} &= s_{k+1}^{leader} - s_{k+1}^{ego} - L_{sep} \\
+    v_{k+1} &= v_{k+1}^{leader} - v_{k+1}^{ego} \\
+    a_{k+1} &=  - u_{k}^{ego} 
+\end{align}
+Rewriting the matrix form with $x_{k}=\begin{bmatrix}s_{k} \\ v_{k} \\ a_{k}\end{bmatrix}$, the system is defined by
+\begin{align}
+    x_{k+1} &= Ax_{k} + Bu_{k}
+\end{align}
+with $$A=\begin{bmatrix}1 & \delta t & 0.5\delta t^2 \\ 0 & 1 & \delta t \\ 0 & 0 & 0 \end{bmatrix}$$ and $$B=\begin{bmatrix} 0 \\ 0\\ -1 \end{bmatrix}$$. The goal is to drive the system states to zeros while minimizing the control effort. In this formulation, the control effort gets penalized twice as it is part of the state as well. So $Q$ and $R$ should be chosen carefully.
+
+\shabox{Notice that in the formulation, there is nothing preventing ego vehicle from crossing the leader and then maintaining $L_{sep}$ apart from the control cost. There is also nothing preventing the system from commanding high acceleration or deceleration between consecutive steps $\implies$ uncomfortable ride. (which could happen based on the initial conditions)}
+
+
+One way to address the second problem is to increase entries in $R$ i.e. penalize control effort a lot but this will also imply slow convergence and still nothing prevents it from giving large $\delta u$. To address this issue one can penalize $\delta u$ in the cost function. The problem can be reformulated with $\delta u$ as the control input i.e rate of change of acceleration as control input. The equations are now
+\begin{align}
+    s_{k+1} &= s_{k+1}^{leader} - s_{k+1}^{ego} - L_{sep} \\
+    v_{k+1} &= v_{k+1}^{leader} - v_{k+1}^{ego} \\
+    a_{k+1} &=  a_{k} + u_{k-1}^{ego}- u_{k}^{ego} \\
+    \implies a_{k+1} &= a_{k} - \Delta u_{k}
+\end{align}
+where $\Delta u_{k} = u_{k}^{ego}- u_{k-1}^{ego}$
+In matrix form the $A$ and $B$ matrices are transformed to
+
+The typical way to go about penalizing change in control inputs for this problem is to initially start with $x$ as two states (position and speed), then augmenting the state vector with control input as the third state (position, speed and acceleration/control input) and a change in the control input (change in acceleration) as the control input.
+\iffalse
+\begin{align}
+    x'_{k+1} &= A'x'_{k} + B'u'_{k}
+\end{align}
+with $x'_{k}=\begin{bmatrix}s_{k} \\ v_{k} \\ a_{k} \\u_{k}\end{bmatrix}$
+, $A'=\begin{bmatrix}1 & \delta t & 0.5\delta t^2  & 0\\ 0 & 1 & \delta t & 0\\ 0 & 0 & 0 & -1 \\ 0 & 0 & 0 & 1 \end{bmatrix}$ and $B'=\begin{bmatrix} 0 \\0 \\ -1 \\ 1 \end{bmatrix}$ and $u'_{k}=u_{k} - u_{k-1}=\Delta u_{k}$
+\fi
+\subsubsection{Trajectory tracking}
+\paragraph{Problem} The trajectory tracking problem is to compute a sequence of control input $u_1, u_2, ..., u_{H-1}$ so that a state sequence $x_0^*, x_1^*, ..., x_H^*$ is attainable such that $x_{t+1}=f(x_t, u_t)$ while minimizing the cost function $\sum_{i=0}^{H-1}(x_i - x_i^*)^T Q (x_i - x_i^*) + (u_i - u_i^*)^T R (u_i - u_i^*)$ where $u_i^*, i=0 to H-1$ is a control input that ensures feasibility i.e. $x_{t+1}^*=f(x_t^*, u_t^*) {} \forall t \in \{0, 1, ..., H-1\}$
+\paragraph{Example}
+The trajectory tracking problem for non-linear systems can be transformed to LQR for Linear Time Varying case via linearization. If the input trajectory is not feasible, the computed solution will not visit the desired states.
+Let's consider the example of cruise control. The objective is to regulate the longitudinal speed of the vehicle using LQR. In this case, it is sufficient to consider longitudinal dynamics alone. Let the reference speed to be tracked be given by
+\begin{align}
+    v(t) &= 10|\sin(0.2\pi t)| \label{chap_2:eq:vel_traj}
+\end{align}
+Assuming that there is no wind and no gradient, the simplified longitudinal dynamics can be written as
+\begin{align}
+    m\dot{v} &= u - F_{friction} - F_{drag}  \label{chap_2:eq:long_traj_tracking}\\ 
+\end{align}
+For the sake of simplicity, let's consider the RMS of speed and acceleration and to derive the nominal control input. RMS is the value that the system will see when the input is applied.
+The following parameters will be used 
+\begin{itemize}
+\item[] $m = 1000$
+\item[] $\rho = 1$
+\item[] $C_d =0.6$
+\item[] $A = 3$
+\item[] $C_r=0.3$
+\item[] $V_{rms} = 10/\sqrt{2} = 7.07$
+\item[] $F_{drag} = 0.5 * \rho * A * C_d * V_{rms}^2$ $\implies$ $F_{drag}=44.98 N$, 
+\item[] $F_{friction}=C_r*V_{rms}$ $\implies$ $F_{friction}=2.12 N$. 
+\item[] RMS of acceleration $\dot{v}$ is $0.45$.
+\end{itemize}
+The nominal control input $u = 1000 * 0.45 + 44.98 + 2.12$ i.e. $u^{*}=497.1 N$.
+
+Next let's linearize the system around the nominal control input and the state at time $t$.
+Using the method discussed in Section~\ref{chap_1:sec:linearization}, the linearized model is
+\begin{align}
+    m\dot{\delta v} &= \delta u - C_r  \delta v - \rho C_d  A  v  \delta v \label{chap_2:eq:linearized_long_traj_tracking} 
+\end{align}
+where $v$ represents the operating point at which linearization is performed
+Let's now verify the accuracy of linearization when $v=10$ $\implies$ $\dot{v}=-0.45$ and $\delta v = 2.93$
+\begin{enumerate}
+    \item Using (~\ref{chap_2:eq:long_traj_tracking}), we get $u=93$ $N$ 
+    \item Using (~\ref{chap_2:eq:linearized_long_traj_tracking}), we have $\dot{\delta v} = -0.45$, $\delta v = 10-7.07=2.93$ $\implies$ $\delta u = -450 + 0.879 + 52.74 = -396.38 $. From this $u = u^{*} + \delta u = 497.1 - 396.38 = 100.72$ $N$
+    \item The estimates are close but not close enough. This is because $\delta v = 2.93$ is a large number. The contributions of the Higher Order Terms (H.O.T) which were neglected in the linearization will contribute to errors. So, when linearizing make sure that the $\delta$'s are small. Had we chosen the operating point to be $8 m/s$, the estimates would be much closer. The resolution of discretization used to solve the problem affects the accuracy of linearization.
+\end{enumerate}
+
+Now let's design the cost function for this example. To make life easier and avoid integrals, lets discretized the linearized system. The equations for the discretized system are given by
+\begin{align}
+    m\delta v_{k+1} = m\delta v_{k} - C_r \delta v^{*}_{k} \delta t - \rho C_d A v \delta v_{k} + u \delta t \\
+    \implies
+    \delta v_{k+1} = \left(1 - \frac{C_r \delta t}{m} - \frac{\rho C_d A v_{k}^{*} \delta t}{m}\right)\delta v_{k} + \delta u \delta t
+\end{align}
+where $\delta t$ is the sampling time and $v_{k}^{*}$ is the target/desired speed at time step $k$
+The cost function for the above system is of the form
+\begin{align*}
+    \sum_{k=1}^{N}q\left(v_{k} - v^{*}_{k}\right)^2 + \sum_{k=1}^{N}r\left(u_{k} - u^{*}_{k}\right)^2
+\end{align*}
+where $N$ is the horizon. For example, if the time horizon we are looking at $T$=$5$ seconds, and $dt=0.1$, then $N=50$, $q$ is the penalty on state deviation and is a scalar (since the system is 1D) and $r$, is the penalty on control input deviation and is a scalar (1D).
+$v_{k}^{*}$ is determined by~(\ref{chap_2:eq:vel_traj}) and $u_{k}^{*} = 497.1$ $\forall$ $k$ $\in$ $\{1, 2, 3, ... N\}$.
+
+
+In this specific example we chose $q=10$ and $r=1$. We chose a low $r$ allow deviation in control as it is not a feasible control input for the states we want to visit. We chose a high $q$ (compared to $r$) as we would like to get sufficiently close to the desired state sequences.
+
+\shabox{If the input trajectory is feasible, why do we need LQR?. For example, in the above case, open loop control inputs can be computed by inverting the dynamics as a function of the desired states. If we did this, why doe we need LQR - use the computed control input directly.}
+
+
+Generally, approximate trajectory (state and control) is computed using a reduced order model of the system. Such an approach gets the state and control sequences close to a feasible/optimal trajectory. Then LQR (or another approach) can be used with higher order model dynamics to improve the controls. One should also be careful in aligning the cost functions across various stages of development. The general approach is to segment the problem into path, trajectory and control modules where the solution from one module feeds into the other improving it successively via additional constraints and model order with appropriate cost functions. There are other reasons too and this is one of them. 
+
+In the example above, we could augment the system with additional equations for representing the lower level control. For example the computed control input might not be translated or transferred to the actuators instantaneously. One could use a first order model to represent the system. But using the model could complicate trajectory generation module. So, partitioning it will make life easier and could also ease compute time issues.
+
+\subsection{Derivation}
+\subsubsection{Dynamic Programming}
+We will use bottom up DP approach for coming up with the solution.
+We will use the following identity 
+\begin{align}
+    \frac{d(x^TAx)}{dx} &= x^T(A^T+A)
+\end{align}
+If $A$ is symmetric
+\begin{align}
+    \frac{d(x^TAx)}{dx} &= x^T(A^T+A)=2x^TA=2A^Tx=2Ax
+\end{align}
+Let's look at the equation~\ref{eq:chap2_lqr_cost}. We can write the optimization problem as
+\begin{align}
+    J^*(x) &= \argmin_{u_k, for k \in \{1, 2, ..., N-1\}}\sum_{k=0}^{N-1}\left[x_k^TQx_k + u_k^TRu_k \right] + x^T_NP_Nx_N \label{eq:chap2_lqr_deriv_cost}
+\end{align}
+assuming the control input $u_N=0$
+we have
+\begin{align}
+    J(x_{N}) &= x_N^TP_NX_N \\
+    \implies J(x_N) &= (Ax_{N-1}+Bu_{N-1})^TP_N(Ax_{N-1}+Bu_{N-1})\\
+    J^*(x_{N-1}) &= \argmin_{u_{N-1}}\left[x_{N-1}^TQx_{N-1} + u_{N-1}^TRu_{N-1} + J^*(x_N)\right] \\
+\end{align}
+\begin{dmath*}
+    \implies J^*(x_{N-1}) = \argmin_{u_{N-1}}\left[x_{N-1}^TQx_{N-1} + u_{N-1}^TRu_{N-1} +  (Ax_{N-1}+Bu_{N-1})^TP_N(Ax_{N-1}+Bu_{N-1})\right]
+\end{dmath*}
+As $u_{N-1}$ does not depend on $x_{N-1}$ and $J(x_{N-1})$ denotes the cost to go from $x_{N-1}$ to $x_{N}$ and $*$ denotes the optimal cost or input corresponding to the optimal cost.
+For minimizing $J(x_{N-1})$, we set $\frac{\partial (x_{N-1})}{\partial u_{N-1}} = 0$ which results in
+\begin{align}
+    & Ru^*_{N-1} + (Ax_{N-1}+Bu^*_{N-1})^TP_NB = 0 \\
+    \implies & Ru^*_{N-1} + B^TP_N(Ax_{N-1}+Bu^*_{N-1}) = 0 \\
+    \implies & u^*_{N-1} = -(R+B^TP_NB)^{-1}B^TP_NAx_{N-1}
+\end{align}
+Now $J(x_{N-1})$ can be reloaded using the above equation as
+\begin{dmath*}
+    J^*(x_{N-1}) = \left[x_{N-1}^TQx_{N-1} + (K_{N-1}x_{N-1})^TR(K_{N-1}x_{N-1}) + (Ax_{N-1}-BK_{N-1}x_{N-1})^TP_N(Ax_{N-1}-BK_{N-1}x_{N-1})\right]
+\end{dmath*}
+with $$K_{N-1} = -(R+B^TP_NB)^{-1}B^TP_NA$$
+$J^*(x_{N-1})$ can now be rewritten as 
+\begin{align}
+    J^*(x_{N-1}) &= x_{N-1}^TP_{N-1}x_{N-1}
+\end{align}
+with
+$$P_{N-1}= Q+K^T_{N-1}RK_{N-1}+(A-BK_{N-1})^TP_{N}(A-BK_{N-1})$$
+The above expression now can be used to compute $u^*_{N-2}$ by looking at $J(x_{N-2})$ similar to the derivation above.
+This concludes the derivation using DP approach
+\subsubsection{Hamiltonian}
+We can also derive the equations using Hamiltonian and the associated optimality conditions. The derivation proceeds as below.
+Let's use the cost function defined by (\ref{eq:chap2_lqr_deriv_cost}).
+
+For this form of derivation, we redefine the cost function as (represent $J(x)$ as $J$)
+\begin{dmath*}
+    J = \sum_{k=0}^{N-1}\left[x_k^TQx_k + u_k^TRu_k + \lambda_{k+1}^T (Ax_k+Bu_k - x_{k+1})\right] + x^T_NP_Nx_N
+\end{dmath*}
+In essence, you are absorbing the equality constraint (the model) into the cost-function and $\lambda_k$'s are called the co-state variables and are a function of time/step.
+The Hamiltonian is defined as
+\begin{align}
+    H_k(x_k, u_k, \lambda_{k+1}) = H_k &= x_k^TQx_k + u_k^TRu_k + \lambda_{k+1}^T (Ax_k+Bu_k)
+\end{align}
+The cost function now is
+\begin{align}
+    J &= x^T_NP_Nx_N +  \sum_{k=0}^{N-1}\left[H_k - \lambda_{k+1}^Tx_{k+1})\right]
+\end{align}
+Next we we compute $\delta J$ and set it to zero.
+\begin{align}
+    \delta J &= \frac{\partial{J}}{\partial x} \delta x + \frac{\partial{J}}{\partial u} \delta u \\
+    \implies \delta J &= Px_N - \lambda_N + \sum_{k=0}^{N-1}\left[\frac{\partial{H_k}}{\partial x} - \lambda_{k}^T + \frac{\partial{H_k}}{\partial u})\right]
+\end{align}
+For $\delta J$ to be zero (first order necessary conditions) and as $\lambda$ is arbitrary, we choose them to make $\delta J = 0$ that is
+\begin{align}
+    & \lambda_N = Px_N \\
+    & \frac{\partial{H_k}}{\partial u} = 0 \\
+    & \lambda_{k} = {\frac{\partial{H_k}}{\partial x}}^T
+\end{align}
+which results in 
+\begin{align}
+    & \lambda_N = Px_N \\
+    & u_k^TR^T = -\lambda_{k+1}^TB\\
+    \implies &u_k = -R^{-1}B^T\lambda_{k+1} \\
+    & \lambda_{k} = \lambda_{k+1}^TA + x_k^TQ^T \\
+    \implies &\lambda_{k} = A^T\lambda_{k+1} + Qx_k
+\end{align}
+
+We chose $\lambda_k = P_kx_k$ (as we expect the control to be a function of states and control as given in the above equations is a function of $\lambda$).
+From the above equations, we have
+\begin{align}
+    & Ru_k = -B^T\lambda_{k+1} \\
+    \implies & Ru_k = -B^TP_{k+1}x_{k+1} \\
+    \implies & Ru_k = -B^TP_{k+1}(Ax_k + Bu_k) \\
+    \implies & u_k = -(R+B^TP_{k+1}B)^{-1}B^TP_{k+1}Ax_k
+\end{align}
+The co-state equations are
+\begin{dmath}
+     \lambda_{k} = A^T\lambda_{k+1} + Qx_k
+     \implies  P_kx_k = A^TP_{k+1}(Ax_k+Bu_k) + Qx_k \\
+     \implies  P_kx_k = A^TP_{k+1}Ax_k - A^TP_{k+1}B(R+B^TP_{k+1}B)^{-1}B^TP_{k+1}Ax_k + Qx_k
+\end{dmath}
+The above equation holds for $\forall k$.
+So
+\begin{align}
+     P_k = A^TP_{k+1}A - A^TP_{k+1}B(R+B^TP_{k+1}B)^{-1}B^TP_{k+1}A + Q
+\end{align}
+This completes the derivation. The two forms derived above are equivalent  - also called the algebriac Riccati equation.
+\subsection{Relation to $H_2$ controller}
+The standard setup for $H_2$ or $H_{\infty}$ control is as follows
+\begin{align}
+    \dot{x(t)} &= Ax(t) + B_ww(t)+B_uu(t) \\
+    z(t) &= C_zx(t) + D_{zw}w(t)+D_{zu}u(t) \\
+    y(t) &= C_yx(t) + D_{yw}w(t) + D_{yu}u(t)
+\end{align}
+where $y$ is the output of the system, $w$ is the exogenous input (disturbance), $u$ is the control input and $x$ is the state. $z$ is a virtual output that captures the performance index to be optimized.  
+
+$H_2$ and $H_{\infty}$ norms over a class of disturbance inputs are used to compute the transfer function/controller $K$ from output $y$ to input $u$ such that the system is stabilized while minimizing the performance index.
+
+Look at the performance index $z$. Typically norm of $z$ with $H_2$ criteria $=\left\lVert z \right\rVert_2$ and no exogenous input i.e. $w(t)=0 \forall t$ and full state feedback and assuming the system is strictly causal (i.e $D_{yu} = 0$) becomes similar to a LQR controller. In particular, with $C_{zx}=[\sqrt{Q}\quad0]^T$ and $D_{zu}=[0\quad\sqrt{R}]^T$ and will result in $H_2$ norm ($z^tz$) which is the same as the cost function $\int_{0}^{\infty}(x^TQx+u^TRu) dt$ (infinite horizon LQR). 
+
+This is also tied to LQG optimal control where the measured output is corrupted by noise and we need to estimate the states from measurements. 
+
+LQR/LQG is a special case of $H_2$ control synthesis.
+
+\section{Iterative LQR}
+iLQR can be used to compute trajectories/control for non-linear systems. In the example above used for trajectory tracking with LQR, we assumed the nominal input to be the rms. Instead we can more accurately compute the trajectory with higher order dynamics included with iLQR. 
+\shabox{iLQR is a trajectory stabilizer which takes in an input trajectory computed using open loop trajectory generation methods like shooting methods, direct collocation methods and so on. In our example, we simply chose an rms value as the input trajectory.}
+
+The general formulation is
+\section{MPC}
+\subsection{Stability}
+\section{Other}
+\subsection{Feedback Linearization}
+\subsection{Lyapunov Controller}
+\subsection{Notes on Stability}
